@@ -81,6 +81,11 @@
             <p id="user-id-display" class="font-mono text-gray-600 break-all"></p>
         </div>
 
+        <!-- Mensagem de erro para quando não há conexão com o banco de dados -->
+        <div id="error-message" class="hidden mt-6 text-center text-red-600 font-medium">
+            O aplicativo não pode se conectar ao banco de dados fora do ambiente do Canvas. Por favor, use-o no Canvas para salvar seus produtos.
+        </div>
+
         <!-- Modal para confirmação -->
         <div id="modal" class="fixed inset-0 bg-gray-900 bg-opacity-50 hidden justify-center items-center z-50">
             <div class="bg-white rounded-lg p-6 shadow-xl w-11/12 max-w-sm">
@@ -100,26 +105,7 @@
         import { getFirestore, collection, addDoc, getDocs, deleteDoc, doc, updateDoc, onSnapshot, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Configurações do Firebase
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : '';
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-
-        // Inicializa o Firebase
-        let app, db, auth;
-        if (Object.keys(firebaseConfig).length > 0) {
-            app = initializeApp(firebaseConfig);
-            db = getFirestore(app);
-            auth = getAuth(app);
-            setLogLevel('Debug');
-        } else {
-            console.error("Configurações do Firebase não encontradas. O aplicativo não funcionará corretamente.");
-        }
-
-        let userId = null;
-        let productsCollection;
-        let isAuthReady = false;
-
+        // Variáveis globais
         const productForm = document.getElementById('product-form');
         const productNameInput = document.getElementById('product-name');
         const productQuantityInput = document.getElementById('product-quantity');
@@ -133,7 +119,178 @@
         const modalMessage = document.getElementById('modal-message');
         const modalConfirmBtn = document.getElementById('modal-confirm');
         const modalCancelBtn = document.getElementById('modal-cancel');
-        
+        const errorMessageDiv = document.getElementById('error-message');
+
+        let app, db, auth;
+        let userId = null;
+        let productsCollection;
+        let isAuthReady = false;
+
+        // Verifica se as configurações do Firebase estão disponíveis (somente no ambiente do Canvas)
+        if (typeof __firebase_config !== 'undefined' && __firebase_config !== '{}') {
+            const firebaseConfig = JSON.parse(__firebase_config);
+            const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : '';
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+            app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+            setLogLevel('Debug');
+
+            // Autentica o usuário e inicializa a conexão com o Firestore
+            onAuthStateChanged(auth, async (user) => {
+                if (user) {
+                    userId = user.uid;
+                    userIdDisplay.textContent = userId;
+                    productsCollection = collection(db, `artifacts/${appId}/users/${userId}/shopping_list`);
+                    isAuthReady = true;
+                    // Escuta as mudanças em tempo real na coleção
+                    onSnapshot(productsCollection, (querySnapshot) => {
+                        let total = 0;
+                        productList.innerHTML = ''; // Limpa a lista para reconstruí-la
+                        loadingSpinner.classList.add('hidden');
+
+                        if (querySnapshot.empty) {
+                            productList.innerHTML = `<li class="text-center text-gray-500">Nenhum produto adicionado.</li>`;
+                        }
+
+                        querySnapshot.forEach((doc) => {
+                            const product = doc.data();
+                            const id = doc.id;
+                            const productTotal = product.quantity * product.price;
+                            total += productTotal;
+
+                            // Cria o item da lista
+                            const li = document.createElement('li');
+                            li.className = 'bg-white rounded-lg shadow-sm p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center border border-gray-200 transition-shadow duration-200 hover:shadow-md';
+                            li.innerHTML = `
+                                <div class="flex-grow">
+                                    <h3 class="font-semibold text-gray-800 text-lg">${product.name}</h3>
+                                    <p class="text-sm text-gray-600 mt-1">
+                                        <span class="font-medium">Qtde:</span> ${product.quantity} &bull; 
+                                        <span class="font-medium">Valor Unitário:</span> ${formatCurrency(product.price)}
+                                    </p>
+                                </div>
+                                <div class="flex flex-col sm:flex-row items-start sm:items-center space-y-2 sm:space-y-0 sm:space-x-4 mt-4 sm:mt-0">
+                                    <span class="text-lg font-bold text-blue-600">${formatCurrency(productTotal)}</span>
+                                    <div class="flex space-x-2">
+                                        <button class="edit-btn px-3 py-1 text-sm font-medium rounded-full bg-yellow-100 text-yellow-800 hover:bg-yellow-200 transition duration-150" data-id="${id}">Editar</button>
+                                        <button class="delete-btn px-3 py-1 text-sm font-medium rounded-full bg-red-100 text-red-800 hover:bg-red-200 transition duration-150" data-id="${id}">Excluir</button>
+                                    </div>
+                                </div>
+                            `;
+                            productList.appendChild(li);
+
+                            // Adiciona listeners aos botões de editar e excluir
+                            li.querySelector('.edit-btn').addEventListener('click', () => editProduct(id, product));
+                            li.querySelector('.delete-btn').addEventListener('click', () => deleteProduct(id));
+                        });
+                        grandTotalDisplay.textContent = formatCurrency(total);
+                    });
+                } else {
+                    // Se a autenticação inicial falhar, tenta com um token personalizado
+                    try {
+                        if (initialAuthToken) {
+                            await signInWithCustomToken(auth, initialAuthToken);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                    } catch (error) {
+                        console.error("Erro ao autenticar no Firebase:", error);
+                    }
+                }
+            });
+
+            // Adicionar um novo produto ao Firestore
+            productForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                if (!isAuthReady) {
+                    console.error("Firebase Auth não está pronto.");
+                    return;
+                }
+                const name = productNameInput.value.trim();
+                const quantity = parseFloat(productQuantityInput.value);
+                const price = parseFloat(productPriceInput.value);
+
+                if (name && !isNaN(quantity) && !isNaN(price)) {
+                    const newProduct = {
+                        name,
+                        quantity,
+                        price,
+                    };
+                    try {
+                        await addDoc(productsCollection, newProduct);
+                        productForm.reset();
+                    } catch (error) {
+                        console.error("Erro ao adicionar documento:", error);
+                    }
+                }
+            });
+
+            // Editar um produto
+            async function editProduct(id, currentProduct) {
+                showModal("Deseja editar este produto? Você será solicitado a inserir novos valores.", async () => {
+                    const newName = prompt("Novo nome (deixe em branco para não alterar):", currentProduct.name);
+                    const newQuantity = prompt("Nova quantidade:", currentProduct.quantity);
+                    const newPrice = prompt("Novo valor (R$):", currentProduct.price);
+
+                    const updates = {};
+                    if (newName !== null && newName.trim() !== '') {
+                        updates.name = newName.trim();
+                    }
+                    if (newQuantity !== null && !isNaN(parseFloat(newQuantity))) {
+                        updates.quantity = parseFloat(newQuantity);
+                    }
+                    if (newPrice !== null && !isNaN(parseFloat(newPrice))) {
+                        updates.price = parseFloat(newPrice);
+                    }
+
+                    if (Object.keys(updates).length > 0) {
+                        try {
+                            const productRef = doc(db, `artifacts/${appId}/users/${userId}/shopping_list/${id}`);
+                            await updateDoc(productRef, updates);
+                        } catch (error) {
+                            console.error("Erro ao atualizar documento:", error);
+                        }
+                    }
+                });
+            }
+
+            // Excluir um produto
+            async function deleteProduct(id) {
+                showModal("Tem certeza que deseja excluir este produto?", async () => {
+                    try {
+                        const productRef = doc(db, `artifacts/${appId}/users/${userId}/shopping_list/${id}`);
+                        await deleteDoc(productRef);
+                    } catch (error) {
+                        console.error("Erro ao excluir documento:", error);
+                    }
+                });
+            }
+
+            // Limpar a lista inteira
+            clearListBtn.addEventListener('click', async () => {
+                showModal("Tem certeza que deseja limpar a lista inteira? Esta ação não pode ser desfeita.", async () => {
+                    try {
+                        const querySnapshot = await getDocs(productsCollection);
+                        // Deleta cada documento individualmente
+                        await Promise.all(querySnapshot.docs.map(d => deleteDoc(d.ref)));
+                    } catch (error) {
+                        console.error("Erro ao limpar a lista:", error);
+                    }
+                });
+            });
+        } else {
+            // Se as variáveis de ambiente não existirem, mostra uma mensagem de erro
+            loadingSpinner.classList.add('hidden');
+            errorMessageDiv.classList.remove('hidden');
+            userIdDisplay.textContent = "Não disponível";
+            
+            // Desabilita os botões para evitar erros
+            productForm.querySelector('button[type="submit"]').disabled = true;
+            clearListBtn.disabled = true;
+        }
+
         // Função para mostrar o modal
         function showModal(message, onConfirm) {
             modalMessage.textContent = message;
@@ -152,163 +309,6 @@
         const formatCurrency = (value) => {
             return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
         };
-
-        // Autentica o usuário e inicializa a conexão com o Firestore
-        onAuthStateChanged(auth, async (user) => {
-            if (user) {
-                userId = user.uid;
-                userIdDisplay.textContent = userId;
-                productsCollection = collection(db, `artifacts/${appId}/users/${userId}/shopping_list`);
-                isAuthReady = true;
-                // Escuta as mudanças em tempo real na coleção
-                onSnapshot(productsCollection, (querySnapshot) => {
-                    let total = 0;
-                    productList.innerHTML = ''; // Limpa a lista para reconstruí-la
-                    loadingSpinner.classList.add('hidden');
-
-                    if (querySnapshot.empty) {
-                        productList.innerHTML = `<li class="text-center text-gray-500">Nenhum produto adicionado.</li>`;
-                    }
-
-                    querySnapshot.forEach((doc) => {
-                        const product = doc.data();
-                        const id = doc.id;
-                        const productTotal = product.quantity * product.price;
-                        total += productTotal;
-
-                        // Cria o item da lista
-                        const li = document.createElement('li');
-                        li.className = 'bg-white rounded-lg shadow-sm p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center border border-gray-200 transition-shadow duration-200 hover:shadow-md';
-                        li.innerHTML = `
-                            <div class="flex-grow">
-                                <h3 class="font-semibold text-gray-800 text-lg">${product.name}</h3>
-                                <p class="text-sm text-gray-600 mt-1">
-                                    <span class="font-medium">Qtde:</span> ${product.quantity} &bull; 
-                                    <span class="font-medium">Valor Unitário:</span> ${formatCurrency(product.price)}
-                                </p>
-                            </div>
-                            <div class="flex flex-col sm:flex-row items-start sm:items-center space-y-2 sm:space-y-0 sm:space-x-4 mt-4 sm:mt-0">
-                                <span class="text-lg font-bold text-blue-600">${formatCurrency(productTotal)}</span>
-                                <div class="flex space-x-2">
-                                    <button class="edit-btn px-3 py-1 text-sm font-medium rounded-full bg-yellow-100 text-yellow-800 hover:bg-yellow-200 transition duration-150" data-id="${id}">Editar</button>
-                                    <button class="delete-btn px-3 py-1 text-sm font-medium rounded-full bg-red-100 text-red-800 hover:bg-red-200 transition duration-150" data-id="${id}">Excluir</button>
-                                </div>
-                            </div>
-                        `;
-                        productList.appendChild(li);
-
-                        // Adiciona listeners aos botões de editar e excluir
-                        li.querySelector('.edit-btn').addEventListener('click', () => editProduct(id, product));
-                        li.querySelector('.delete-btn').addEventListener('click', () => deleteProduct(id));
-                    });
-                    grandTotalDisplay.textContent = formatCurrency(total);
-                });
-            } else {
-                // Se a autenticação inicial falhar, tenta com um token personalizado
-                try {
-                    if (initialAuthToken) {
-                        await signInWithCustomToken(auth, initialAuthToken);
-                    } else {
-                        await signInAnonymously(auth);
-                    }
-                } catch (error) {
-                    console.error("Erro ao autenticar no Firebase:", error);
-                }
-            }
-        });
-
-        // Adicionar um novo produto ao Firestore
-        productForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            if (!isAuthReady) {
-                console.error("Firebase Auth não está pronto.");
-                return;
-            }
-            const name = productNameInput.value.trim();
-            const quantity = parseFloat(productQuantityInput.value);
-            const price = parseFloat(productPriceInput.value);
-
-            if (name && !isNaN(quantity) && !isNaN(price)) {
-                const newProduct = {
-                    name,
-                    quantity,
-                    price,
-                };
-                try {
-                    await addDoc(productsCollection, newProduct);
-                    productForm.reset();
-                } catch (error) {
-                    console.error("Erro ao adicionar documento:", error);
-                }
-            }
-        });
-
-        // Editar um produto
-        async function editProduct(id, currentProduct) {
-             showModal("Deseja editar este produto? Você será solicitado a inserir novos valores.", async () => {
-                const newName = prompt("Novo nome (deixe em branco para não alterar):", currentProduct.name);
-                const newQuantity = prompt("Nova quantidade:", currentProduct.quantity);
-                const newPrice = prompt("Novo valor (R$):", currentProduct.price);
-
-                const updates = {};
-                if (newName !== null && newName.trim() !== '') {
-                    updates.name = newName.trim();
-                }
-                if (newQuantity !== null && !isNaN(parseFloat(newQuantity))) {
-                    updates.quantity = parseFloat(newQuantity);
-                }
-                if (newPrice !== null && !isNaN(parseFloat(newPrice))) {
-                    updates.price = parseFloat(newPrice);
-                }
-
-                if (Object.keys(updates).length > 0) {
-                    try {
-                        const productRef = doc(db, `artifacts/${appId}/users/${userId}/shopping_list/${id}`);
-                        await updateDoc(productRef, updates);
-                    } catch (error) {
-                        console.error("Erro ao atualizar documento:", error);
-                    }
-                }
-            });
-        }
-
-        // Excluir um produto
-        async function deleteProduct(id) {
-            showModal("Tem certeza que deseja excluir este produto?", async () => {
-                try {
-                    const productRef = doc(db, `artifacts/${appId}/users/${userId}/shopping_list/${id}`);
-                    await deleteDoc(productRef);
-                } catch (error) {
-                    console.error("Erro ao excluir documento:", error);
-                }
-            });
-        }
-
-        // Limpar a lista inteira
-        clearListBtn.addEventListener('click', async () => {
-            showModal("Tem certeza que deseja limpar a lista inteira? Esta ação não pode ser desfeita.", async () => {
-                try {
-                    const querySnapshot = await getDocs(productsCollection);
-                    // Deleta cada documento individualmente
-                    await Promise.all(querySnapshot.docs.map(d => deleteDoc(d.ref)));
-                } catch (error) {
-                    console.error("Erro ao limpar a lista:", error);
-                }
-            });
-        });
-
-        // Registra o Service Worker para habilitar o PWA e o cache
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/service-worker.js')
-                    .then(registration => {
-                        console.log('Service Worker registrado com sucesso:', registration);
-                    })
-                    .catch(err => {
-                        console.log('Falha no registro do Service Worker:', err);
-                    });
-            });
-        }
     </script>
 </body>
 </html>
