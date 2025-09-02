@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Calculadora de Compras</title>
+    <!-- Configurações para PWA no iOS -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black">
+    <!-- Link para o arquivo de manifesto e ícones -->
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="icon-192x192.png">
+    
+    <!-- Inclui o Tailwind CSS para um estilo moderno e responsivo -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+        }
+        /* Estilos personalizados para a interface */
+        .shadow-custom {
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen p-4 sm:p-6 bg-gray-100">
+    <div class="bg-white rounded-2xl shadow-custom p-6 w-full max-w-2xl">
+        <h1 class="text-3xl font-bold text-center text-gray-800 mb-6">Calculadora de Compras</h1>
+        
+        <!-- Formulário para adicionar novos produtos -->
+        <form id="product-form" class="space-y-4">
+            <div>
+                <label for="product-name" class="block text-sm font-medium text-gray-700">Produto</label>
+                <input type="text" id="product-name" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500 transition duration-150" placeholder="Nome do Produto" required>
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label for="product-quantity" class="block text-sm font-medium text-gray-700">Quantidade</label>
+                    <input type="number" id="product-quantity" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500 transition duration-150" placeholder="0" min="0" required>
+                </div>
+                <div>
+                    <label for="product-price" class="block text-sm font-medium text-gray-700">Valor Unitário (R$)</label>
+                    <input type="number" id="product-price" step="0.01" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500 transition duration-150" placeholder="0.00" min="0" required>
+                </div>
+            </div>
+            <button type="submit" class="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition duration-150">
+                Adicionar Produto
+            </button>
+        </form>
+
+        <hr class="my-6 border-t border-gray-200">
+
+        <!-- Lista de produtos -->
+        <div id="product-list-container" class="space-y-4">
+            <div id="loading" class="flex justify-center items-center py-8 text-gray-500">
+                <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Carregando...
+            </div>
+            <ul id="product-list" class="space-y-4"></ul>
+        </div>
+        
+        <!-- Total e botões de ação -->
+        <div class="mt-6">
+            <div class="flex justify-between items-center text-xl font-semibold text-gray-800 bg-gray-50 rounded-lg p-4">
+                <span>Total da Compra:</span>
+                <span id="grand-total" class="text-blue-600">R$ 0,00</span>
+            </div>
+            <button id="clear-list-btn" class="mt-4 w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-500 hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition duration-150">
+                Limpar Lista
+            </button>
+        </div>
+
+        <!-- ID do usuário para depuração -->
+        <div class="mt-6 text-center text-xs text-gray-500">
+            <p>ID do Usuário:</p>
+            <p id="user-id-display" class="font-mono text-gray-600 break-all"></p>
+        </div>
+
+        <!-- Modal para confirmação -->
+        <div id="modal" class="fixed inset-0 bg-gray-900 bg-opacity-50 hidden justify-center items-center z-50">
+            <div class="bg-white rounded-lg p-6 shadow-xl w-11/12 max-w-sm">
+                <p id="modal-message" class="text-lg text-center mb-4 text-gray-800"></p>
+                <div class="flex justify-center space-x-4">
+                    <button id="modal-confirm" class="px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700 transition duration-150">Confirmar</button>
+                    <button id="modal-cancel" class="px-4 py-2 rounded-md bg-gray-300 text-gray-800 hover:bg-gray-400 transition duration-150">Cancelar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Script de inicialização do Firebase e registro do Service Worker -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, getDocs, deleteDoc, doc, updateDoc, onSnapshot, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Configurações do Firebase
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : '';
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+        // Inicializa o Firebase
+        let app, db, auth;
+        if (Object.keys(firebaseConfig).length > 0) {
+            app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+            setLogLevel('Debug');
+        } else {
+            console.error("Configurações do Firebase não encontradas. O aplicativo não funcionará corretamente.");
+        }
+
+        let userId = null;
+        let productsCollection;
+        let isAuthReady = false;
+
+        const productForm = document.getElementById('product-form');
+        const productNameInput = document.getElementById('product-name');
+        const productQuantityInput = document.getElementById('product-quantity');
+        const productPriceInput = document.getElementById('product-price');
+        const productList = document.getElementById('product-list');
+        const grandTotalDisplay = document.getElementById('grand-total');
+        const clearListBtn = document.getElementById('clear-list-btn');
+        const loadingSpinner = document.getElementById('loading');
+        const userIdDisplay = document.getElementById('user-id-display');
+        const modal = document.getElementById('modal');
+        const modalMessage = document.getElementById('modal-message');
+        const modalConfirmBtn = document.getElementById('modal-confirm');
+        const modalCancelBtn = document.getElementById('modal-cancel');
+        
+        // Função para mostrar o modal
+        function showModal(message, onConfirm) {
+            modalMessage.textContent = message;
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+            modalConfirmBtn.onclick = () => {
+                onConfirm();
+                modal.classList.add('hidden');
+            };
+            modalCancelBtn.onclick = () => {
+                modal.classList.add('hidden');
+            };
+        }
+
+        // Função para formatar o valor como moeda
+        const formatCurrency = (value) => {
+            return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
+        };
+
+        // Autentica o usuário e inicializa a conexão com o Firestore
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                userId = user.uid;
+                userIdDisplay.textContent = userId;
+                productsCollection = collection(db, `artifacts/${appId}/users/${userId}/shopping_list`);
+                isAuthReady = true;
+                // Escuta as mudanças em tempo real na coleção
+                onSnapshot(productsCollection, (querySnapshot) => {
+                    let total = 0;
+                    productList.innerHTML = ''; // Limpa a lista para reconstruí-la
+                    loadingSpinner.classList.add('hidden');
+
+                    if (querySnapshot.empty) {
+                        productList.innerHTML = `<li class="text-center text-gray-500">Nenhum produto adicionado.</li>`;
+                    }
+
+                    querySnapshot.forEach((doc) => {
+                        const product = doc.data();
+                        const id = doc.id;
+                        const productTotal = product.quantity * product.price;
+                        total += productTotal;
+
+                        // Cria o item da lista
+                        const li = document.createElement('li');
+                        li.className = 'bg-white rounded-lg shadow-sm p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center border border-gray-200 transition-shadow duration-200 hover:shadow-md';
+                        li.innerHTML = `
+                            <div class="flex-grow">
+                                <h3 class="font-semibold text-gray-800 text-lg">${product.name}</h3>
+                                <p class="text-sm text-gray-600 mt-1">
+                                    <span class="font-medium">Qtde:</span> ${product.quantity} &bull; 
+                                    <span class="font-medium">Valor Unitário:</span> ${formatCurrency(product.price)}
+                                </p>
+                            </div>
+                            <div class="flex flex-col sm:flex-row items-start sm:items-center space-y-2 sm:space-y-0 sm:space-x-4 mt-4 sm:mt-0">
+                                <span class="text-lg font-bold text-blue-600">${formatCurrency(productTotal)}</span>
+                                <div class="flex space-x-2">
+                                    <button class="edit-btn px-3 py-1 text-sm font-medium rounded-full bg-yellow-100 text-yellow-800 hover:bg-yellow-200 transition duration-150" data-id="${id}">Editar</button>
+                                    <button class="delete-btn px-3 py-1 text-sm font-medium rounded-full bg-red-100 text-red-800 hover:bg-red-200 transition duration-150" data-id="${id}">Excluir</button>
+                                </div>
+                            </div>
+                        `;
+                        productList.appendChild(li);
+
+                        // Adiciona listeners aos botões de editar e excluir
+                        li.querySelector('.edit-btn').addEventListener('click', () => editProduct(id, product));
+                        li.querySelector('.delete-btn').addEventListener('click', () => deleteProduct(id));
+                    });
+                    grandTotalDisplay.textContent = formatCurrency(total);
+                });
+            } else {
+                // Se a autenticação inicial falhar, tenta com um token personalizado
+                try {
+                    if (initialAuthToken) {
+                        await signInWithCustomToken(auth, initialAuthToken);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                } catch (error) {
+                    console.error("Erro ao autenticar no Firebase:", error);
+                }
+            }
+        });
+
+        // Adicionar um novo produto ao Firestore
+        productForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!isAuthReady) {
+                console.error("Firebase Auth não está pronto.");
+                return;
+            }
+            const name = productNameInput.value.trim();
+            const quantity = parseFloat(productQuantityInput.value);
+            const price = parseFloat(productPriceInput.value);
+
+            if (name && !isNaN(quantity) && !isNaN(price)) {
+                const newProduct = {
+                    name,
+                    quantity,
+                    price,
+                };
+                try {
+                    await addDoc(productsCollection, newProduct);
+                    productForm.reset();
+                } catch (error) {
+                    console.error("Erro ao adicionar documento:", error);
+                }
+            }
+        });
+
+        // Editar um produto
+        async function editProduct(id, currentProduct) {
+             showModal("Deseja editar este produto? Você será solicitado a inserir novos valores.", async () => {
+                const newName = prompt("Novo nome (deixe em branco para não alterar):", currentProduct.name);
+                const newQuantity = prompt("Nova quantidade:", currentProduct.quantity);
+                const newPrice = prompt("Novo valor (R$):", currentProduct.price);
+
+                const updates = {};
+                if (newName !== null && newName.trim() !== '') {
+                    updates.name = newName.trim();
+                }
+                if (newQuantity !== null && !isNaN(parseFloat(newQuantity))) {
+                    updates.quantity = parseFloat(newQuantity);
+                }
+                if (newPrice !== null && !isNaN(parseFloat(newPrice))) {
+                    updates.price = parseFloat(newPrice);
+                }
+
+                if (Object.keys(updates).length > 0) {
+                    try {
+                        const productRef = doc(db, `artifacts/${appId}/users/${userId}/shopping_list/${id}`);
+                        await updateDoc(productRef, updates);
+                    } catch (error) {
+                        console.error("Erro ao atualizar documento:", error);
+                    }
+                }
+            });
+        }
+
+        // Excluir um produto
+        async function deleteProduct(id) {
+            showModal("Tem certeza que deseja excluir este produto?", async () => {
+                try {
+                    const productRef = doc(db, `artifacts/${appId}/users/${userId}/shopping_list/${id}`);
+                    await deleteDoc(productRef);
+                } catch (error) {
+                    console.error("Erro ao excluir documento:", error);
+                }
+            });
+        }
+
+        // Limpar a lista inteira
+        clearListBtn.addEventListener('click', async () => {
+            showModal("Tem certeza que deseja limpar a lista inteira? Esta ação não pode ser desfeita.", async () => {
+                try {
+                    const querySnapshot = await getDocs(productsCollection);
+                    // Deleta cada documento individualmente
+                    await Promise.all(querySnapshot.docs.map(d => deleteDoc(d.ref)));
+                } catch (error) {
+                    console.error("Erro ao limpar a lista:", error);
+                }
+            });
+        });
+
+        // Registra o Service Worker para habilitar o PWA e o cache
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/service-worker.js')
+                    .then(registration => {
+                        console.log('Service Worker registrado com sucesso:', registration);
+                    })
+                    .catch(err => {
+                        console.log('Falha no registro do Service Worker:', err);
+                    });
+            });
+        }
+    </script>
+</body>
+</html>
